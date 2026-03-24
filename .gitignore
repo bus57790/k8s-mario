@@ -1,0 +1,117 @@
+.terraform*
+*.tfstate
+*.zip
+aws*
+kubectl
+
+# =========================
+# OS FILES
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# =========================
+# LOG FILES
+# =========================
+*.log
+logs/
+*.out
+
+# =========================
+# LARGE FILES / BINARIES
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.rar
+*.7z
+*.war
+*.jar
+*.ear
+*.bin
+*.exe
+*.dll
+*.so
+*.iso
+*.img
+*.dmp
+*.backup
+*.bak
+
+# =========================
+# DATABASE FILES
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+*.rman
+*.dmp
+
+# =========================
+# DOCKER
+# =========================
+.docker/
+docker-compose.override.yml
+
+# =========================
+# KUBERNETES
+# =========================
+*.kubeconfig
+kubeconfig
+*.pem
+*.key
+*.crt
+secrets.yaml
+
+# =========================
+# TERRAFORM
+# =========================
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*.tfvars
+*.tfvars.json
+
+# =========================
+# JENKINS
+# =========================
+workspace/
+target/
+build/
+
+# =========================
+# MAVEN / JAVA
+# =========================
+target/
+*.class
+
+# =========================
+# NODE
+# =========================
+node_modules/
+
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.pyc
+venv/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# ENV FILES (SECRETS)
+# =========================
+.env
+.env.*
