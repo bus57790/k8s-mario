@@ -1,0 +1,27 @@
+services:
+  jenkins:
+    build:
+      context: ./Jenkins
+      dockerfile: Dockerfile  # Custom Dockerfile for Jenkins
+    container_name: jenkins
+    ports:
+      - "8010:8080"   # Jenkins web UI
+      - "50000:50000" # Jenkins agent
+    group_add:
+      - "${DOCKER_GID}"  # Host docker group GID for /var/run/docker.sock
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock  # Mount Docker socket
+      - /home/ubuntu/.kube/config:/var/jenkins_home/.kube/config:ro  # Mount kubeconfig
+    networks:
+      - ci-network
+    environment:
+      - JENKINS_OPTS=--httpPort=8080
+      - KUBECONFIG=/var/jenkins_home/.kube/config
+
+networks:
+  ci-network:
+    driver: bridge
+
+volumes:
+  jenkins_home:
