@@ -1,54 +1,101 @@
-FROM jenkins/jenkins:lts-jdk17
+// mario-app-build Jenkinsfile for building the Mario application Docker image and pushing to Docker Hub
+pipeline {
+    agent any
 
-# Switch to root to update container
-USER root
+    // Define parameters for the build, including a required IMAGE_TAG for the Docker image version
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag to build and deploy (defaults to latest)')
+    }
 
-# Install wget
-RUN apt-get update && apt-get install -y \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    // Define environment variables for Docker image name, credentials, and kubeconfig for deployment
+    environment {
+        DOCKER_IMAGE = "bus57790/mario"
+        IMAGE_TAG = "${params.IMAGE_TAG}"
+        build_version = "${params.IMAGE_TAG}"
+        DOCKER_CREDS = 'dockerhub-credentials'
+        KUBE_CONFIG = 'k8s-config-id'
+    }
 
-# Install Trivy
-RUN apt-get update && apt-get install -y wget gnupg \
-    && wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee /etc/apt/sources.list.d/trivy.list \
-    && apt-get update \
-    && apt-get install -y trivy \
-    && rm -rf /var/lib/apt/lists/*
+    stages {
+        // Normalizes IMAGE_TAG so empty input still uses a safe default for first-time builds
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    env.IMAGE_TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG.trim() : 'latest'
+                    env.build_version = env.IMAGE_TAG
+                }
+            }
+        }
 
-# Install kubeconform
-RUN set -eux; \
-    PLATFORM="$(uname | tr '[:upper:]' '[:lower:]')"; \
-    # Replace 'latest' with a specific tag if version pinning is required.
-    wget -q "https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-${PLATFORM}-amd64.tar.gz"; \
-    tar -xzf "kubeconform-${PLATFORM}-amd64.tar.gz"; \
-    cp kubeconform /usr/local/bin/kubeconform; \
-    chmod +x /usr/local/bin/kubeconform; \
-    rm -f "kubeconform-${PLATFORM}-amd64.tar.gz"
+        // Checkout the git repository in the feature branch to access deployment manifests
+        stage('Checkout') {
+            steps {
+                git branch: 'feature/jenkins-integration', url: 'https://github.com/bus57790/k8s-mario.git'
+            }
+        }
 
-# Install kubectl
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+        // Performs a security scan on the Docker image using Trivy, checking for vulnerabilities with HIGH and CRITICAL severity. The build will not fail if vulnerabilities are found, but they will be reported in the logs.
+        stage('Security Scan (Trivy)') {
+            steps {
+                script {
+                    sh 'trivy image --exit-code 1 --severity HIGH,CRITICAL ${DOCKER_IMAGE}:latest || true'
+                }
+            }
+        }
 
-# Install AWS CLI
-RUN apt-get update && apt-get install -y \
-    awscli && \
-    rm -rf /var/lib/apt/lists/*
+        // Re-tags an existing Docker Hub image so this pipeline does not depend on a local Dockerfile
+        stage('Tag & Push Docker Image') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', DOCKER_CREDS) {
+                        // Pull a known-safe source tag, then create and push the requested tag.
+                        sh '''
+                            set -e
+                            docker pull ${DOCKER_IMAGE}:latest
+                            docker tag ${DOCKER_IMAGE}:latest ${DOCKER_IMAGE}:${IMAGE_TAG}
+                            docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                            docker push ${DOCKER_IMAGE}:latest
+                        '''
+                    }
+                }
+            }
+        }
 
-# Install Docker
-RUN apt-get update && \
-    apt-get install -y \
-    ca-certificates \
-    curl \
-    sudo && \
-    curl -fsSL https://get.docker.com -o install-docker.sh && \
-    sudo sh install-docker.sh && \
-    sudo usermod -a -G docker jenkins
+        // Updates the k8s deployment manifest with the new Docker image tag, commits the change to the feature branch, and pushes it back to GitHub using a personal access token for authentication. This allows the CD pipeline to deploy the new image version to Kubernetes.
+        stage('Update Deployment File') {
+            environment {
+                GIT_REPO_NAME = "k8s-mario"
+                GIT_USER_NAME = "bus57790"
+            }
+            steps {
+                withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                        git config user.email "bus57790@hotmail.com"
+                        git config user.name "bus57790"
+                        sed -i "s|image: .*|image: ${DOCKER_IMAGE}:${build_version}|" k8s/deployment.yaml
+                        git add k8s/deployment.yaml
+                        git commit -m "Update deployment image to version ${build_version}"
+                        git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:feature/jenkins-integration
+                    '''
+                }
+            }
+        }
+    }
 
-# Expose Jenkins port
-EXPOSE 8080
-
-# Switch back to Jenkins user
-USER jenkins
+    // Post actions to clean up the workspace and print success/failure messages, as well as triggering the CD pipeline build for deployment if the build is successful
+    post {
+        always {
+            echo 'Cleaning up workspace...'
+            cleanWs()
+        }
+        success {
+            echo 'Mario application updated'
+            // Triggering the mario-app-deployment build
+            build job: 'mario-app-deployment'
+        }
+        failure {
+            echo 'Mario build failed. Check logs for details.'
+        }
+    }
+}
 

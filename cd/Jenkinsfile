@@ -1,54 +1,72 @@
-FROM jenkins/jenkins:lts-jdk17
+// mario-app-deployment Jenkinsfile for deploying the Mario application to Kubernetes
+pipeline {
+    agent any
 
-# Switch to root to update container
-USER root
+    environment {
+        KUBE_CONFIG = 'k8s-config-id'
+    }
 
-# Install wget
-RUN apt-get update && apt-get install -y \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    // Checkout the git repo in our feature branch to get the k8s manifest files for deployment
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'feature/jenkins-integration', url: 'https://github.com/bus57790/k8s-mario.git'
+            }
+        }
 
-# Install Trivy
-RUN apt-get update && apt-get install -y wget gnupg \
-    && wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee /etc/apt/sources.list.d/trivy.list \
-    && apt-get update \
-    && apt-get install -y trivy \
-    && rm -rf /var/lib/apt/lists/*
+        // Checks the k8s manifest files for syntax errors and best practices using kubeconform
+        stage('K8s Manifest Lint') {
+            steps {
+                script {
+                    sh 'kubeconform -strict -summary k8s/deployment.yaml k8s/service.yaml'
+                    // sh "kubectl apply --dry-run=client -f k8s/deployment.yaml --kubeconfig=${KUBE_CONFIG}"
+                }
+            }
+        }
 
-# Install kubeconform
-RUN set -eux; \
-    PLATFORM="$(uname | tr '[:upper:]' '[:lower:]')"; \
-    # Replace 'latest' with a specific tag if version pinning is required.
-    wget -q "https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-${PLATFORM}-amd64.tar.gz"; \
-    tar -xzf "kubeconform-${PLATFORM}-amd64.tar.gz"; \
-    cp kubeconform /usr/local/bin/kubeconform; \
-    chmod +x /usr/local/bin/kubeconform; \
-    rm -f "kubeconform-${PLATFORM}-amd64.tar.gz"
+        // Deploys the application to Kubernetes using kubectl apply with the provided kubeconfig credentials
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    withKubeConfig([credentialsId: env.KUBE_CONFIG]) {
+                        sh """
+                        kubectl apply -f k8s/deployment.yaml
+                        kubectl apply -f k8s/service.yaml
+                        """
+                        // sed -i 's|image:.*|image: ${DOCKER_IMAGE}:${IMAGE_TAG}|g' k8s/deployment.yaml
+                        // kubectl set image -f k8s/deployment.yaml mario=${DOCKER_IMAGE}:${IMAGE_TAG}
+                    }
+                }
+            }
+        }
 
-# Install kubectl
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+        // Verifies the deployment by checking the rollout status and listing the pods in the mario namespace
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    withKubeConfig([credentialsId: env.KUBE_CONFIG]) {
+                        sh """
+                        kubectl rollout status deployment/mario-deployment
+                        kubectl get pods -l app=mario
+                        """
+                    }
+                }
+            }
+        }
+    }
 
-# Install AWS CLI
-RUN apt-get update && apt-get install -y \
-    awscli && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Docker
-RUN apt-get update && \
-    apt-get install -y \
-    ca-certificates \
-    curl \
-    sudo && \
-    curl -fsSL https://get.docker.com -o install-docker.sh && \
-    sudo sh install-docker.sh && \
-    sudo usermod -a -G docker jenkins
-
-# Expose Jenkins port
-EXPOSE 8080
-
-# Switch back to Jenkins user
-USER jenkins
+    // Post actions to clean up the workspace and print success/failure messages
+    post {
+        always {
+            echo 'Cleaning up workspace...'
+            cleanWs()
+        }
+        success {
+            echo 'Mario deployment complete'
+        }
+        failure {
+            echo 'Deployment failed. Check logs for interface details.'
+        }
+    }
+}
 
